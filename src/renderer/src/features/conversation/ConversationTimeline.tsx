@@ -759,69 +759,66 @@ export function ConversationTimeline() {
               )}
             </Show>
           </div>
-          <Show when={keyedPrompt()} keyed>
-            {(entry) => (
-              <Loading>
-                <QuestionPromptBubble
-                  questions={entry.prompt.questions}
-                  elementRef={setRequiredInteractionElement}
-                  sendShortcut={deviceSendShortcut(props.platform)}
-                  onSubmit={props.onAnswerPrompt}
-                  onResolutionPresented={() =>
-                    props.onPromptResolutionPresented?.(
-                      entry.prompt.agentId,
-                      entry.prompt.turnId,
-                      entry.prompt.requestId,
-                    )
-                  }
-                />
-              </Loading>
-            )}
-          </Show>
-          <Show keyed when={props.approval}>
-            {(approval) => (
-              <Loading>
-                <ApprovalCard
-                  approval={approval}
-                  agentName={props.agent?.name}
-                  onApprove={() => props.onRespondToApproval("accept")}
-                  onReject={() => props.onRespondToApproval("decline")}
-                  onAlwaysAllow={props.onAlwaysAllowApproval}
-                />
-              </Loading>
-            )}
-          </Show>
-          <Show when={props.browserTakeover}>
+        </Show>
+        {/* Pending attention does not depend on the initial history read. */}
+        <Show when={keyedPrompt()} keyed>
+          {(entry) => (
             <Loading>
-              <BrowserTakeoverCard
-                request={props.browserTakeover}
-                agentName={props.agent?.name ?? "the agent"}
-                tab={browserTakeoverTab()}
-                preview={browserTakeoverPreview().preview}
-                previewStatus={browserTakeoverPreview().status}
-                onOpen={openBrowserTakeoverTab}
-                onComplete={() => respondToBrowserTakeover("complete")}
-                onCancel={() => respondToBrowserTakeover("cancel")}
-                browserSecret={{
-                  loadPreview: runtime.browser.capturePreview,
-                  onRespond: runtime.agent.respondToBrowserSecret,
-                }}
+              <QuestionPromptBubble
+                questions={entry.prompt.questions}
+                elementRef={setRequiredInteractionElement}
+                sendShortcut={deviceSendShortcut(props.platform)}
+                onSubmit={props.onAnswerPrompt}
+                onResolutionPresented={() =>
+                  props.onPromptResolutionPresented?.(entry.prompt.agentId, entry.prompt.turnId, entry.prompt.requestId)
+                }
               />
             </Loading>
-          </Show>
-          <Show when={!props.browserTakeover && browserTakeoverResolution()}>
-            {(resolution) => (
-              <BrowserTakeoverCard
-                agentName={props.agent?.name ?? "the agent"}
-                tab={resolution().tab}
-                preview={resolution().preview}
-                previewStatus={resolution().previewStatus}
-                decision={resolution().decision}
-                onComplete={async () => false}
-                onCancel={async () => false}
+          )}
+        </Show>
+        <Show keyed when={props.approval}>
+          {(approval) => (
+            <Loading>
+              <ApprovalCard
+                approval={approval}
+                agentName={props.agent?.name}
+                onApprove={() => props.onRespondToApproval("accept")}
+                onReject={() => props.onRespondToApproval("decline")}
+                onAlwaysAllow={props.onAlwaysAllowApproval}
               />
-            )}
-          </Show>
+            </Loading>
+          )}
+        </Show>
+        <Show when={props.browserTakeover}>
+          <Loading>
+            <BrowserTakeoverCard
+              request={props.browserTakeover}
+              agentName={props.agent?.name ?? "the agent"}
+              tab={browserTakeoverTab()}
+              preview={browserTakeoverPreview().preview}
+              previewStatus={browserTakeoverPreview().status}
+              onOpen={openBrowserTakeoverTab}
+              onComplete={() => respondToBrowserTakeover("complete")}
+              onCancel={() => respondToBrowserTakeover("cancel")}
+              browserSecret={{
+                loadPreview: runtime.browser.capturePreview,
+                onRespond: runtime.agent.respondToBrowserSecret,
+              }}
+            />
+          </Loading>
+        </Show>
+        <Show when={!props.browserTakeover && browserTakeoverResolution()}>
+          {(resolution) => (
+            <BrowserTakeoverCard
+              agentName={props.agent?.name ?? "the agent"}
+              tab={resolution().tab}
+              preview={resolution().preview}
+              previewStatus={resolution().previewStatus}
+              decision={resolution().decision}
+              onComplete={async () => false}
+              onCancel={async () => false}
+            />
+          )}
         </Show>
       </div>
     </>
