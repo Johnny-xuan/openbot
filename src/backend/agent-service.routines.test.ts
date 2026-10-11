@@ -348,6 +348,11 @@ describe.sequential("AgentService: routines", () => {
     const firstDelivery = service.listQueue(agent.id).deliveries.find((delivery) => delivery.status === "running");
     const threadId = store.activeProviderSession(agent.id)?.externalSessionId;
     if (!firstDelivery?.turnId || !client || !threadId) throw new Error("The first routine turn did not start.");
+    // The start response marks the row running before the fake publishes turn/started.
+    // Complete the turn only after its lifecycle start has reached the service.
+    await waitFor(() =>
+      emitted.some((event) => event.type === "turn-started" && event.turnId === firstDelivery.turnId),
+    );
     const appendConversationMessage = store.database.appendConversationMessage.bind(store.database);
     let rejectTerminalMarker = true;
     vi.spyOn(store.database, "appendConversationMessage").mockImplementation((input) => {
@@ -1126,29 +1131,44 @@ describe.sequential("AgentService: routines", () => {
     expect((await protocolMessages(logPath)).filter((message) => message.method === "thread/read")).toHaveLength(0);
   });
 
-  it("does not fail or replay a turn whose start response times out after lifecycle events", async () => {
-    process.env.OPENBOT_FAKE_AUTO_COMPLETE = "Finished despite the late response";
-    // Auto-complete is 20ms. The RPC timeout has to land after that, and before
-    // the delayed start response. 75ms vs 250ms loses that order when CI load
-    // delays the fake CLI, and the wait then never sees completed.
-    process.env.OPENBOT_FAKE_TURN_START_RESPONSE_DELAY = "1500";
-    const { store, mailbox } = stores(root);
-    service = createTestService({ store, mailbox, requestTimeoutMs: 400 });
-    const events: AgentEvent[] = [];
-    service.on("event", (event) => events.push(event));
-    await runCauseEffect(service.initialize());
+  it.each([true, false])(
+    "does not fail or replay a turn whose start response times out after lifecycle events (exact receipt: %s)",
+    async (receipt) => {
+      process.env.OPENBOT_FAKE_INPUT_RECEIPT = receipt ? "1" : "0";
+      process.env.OPENBOT_FAKE_AUTO_COMPLETE = "Finished despite the late response";
+      // Auto-complete is 20ms. The RPC timeout has to land after that, and before
+      // the delayed start response. 75ms vs 250ms loses that order when CI load
+      // delays the fake CLI, and the wait then never sees completed.
+      process.env.OPENBOT_FAKE_TURN_START_RESPONSE_DELAY = "1500";
+      const { store, mailbox } = stores(root);
+      service = createTestService({ store, mailbox, requestTimeoutMs: 400 });
+      const events: AgentEvent[] = [];
+      service.on("event", (event) => events.push(event));
+      await runCauseEffect(service.initialize());
 
-    await runCauseEffect(service.sendMessage({ agentId: "chief", text: "Run exactly once" }));
-    await waitForQueue(service, "chief", (queue) => queue.deliveries[0]?.status === "completed");
-    await waitFor(() => events.some((event) => event.type === "error" && event.code === "delivery_start_unconfirmed"));
+      await runCauseEffect(service.sendMessage({ agentId: "chief", text: "Run exactly once" }));
+      await waitFor(() => events.some((event) => event.type === "turn-completed"));
+      if (receipt) await waitForQueue(service, "chief", (queue) => queue.deliveries[0]?.status === "completed");
+      await waitFor(() =>
+        events.some((event) => event.type === "error" && event.code === "delivery_start_unconfirmed"),
+      );
 
-    expect(service.listQueue("chief").deliveries[0]).toMatchObject({
-      status: "completed",
-      error: null,
-    });
-    expect((await protocolMessages(logPath)).filter((message) => message.method === "turn/start")).toHaveLength(1);
-    expect(events).toContainEqual(expect.objectContaining({ type: "error", code: "delivery_start_unconfirmed" }));
-  });
+      expect(service.listQueue("chief").deliveries[0]).toMatchObject({
+        status: receipt ? "completed" : "starting",
+        error: receipt ? null : expect.any(String),
+      });
+      expect((await runCauseEffect(service.readConversation("chief"))).activeTurnId).toBeNull();
+      if (!receipt) {
+        const delivery = service.listQueue("chief").deliveries[0];
+        expect(delivery?.turnId).toBeNull();
+        if (!delivery) throw new Error("The unconfirmed delivery is missing.");
+        await runCauseEffect(service.cancelQueuedMessage("chief", delivery.id));
+        expect(service.listQueue("chief").deliveries[0]?.status).toBe("cancelled");
+      }
+      expect((await protocolMessages(logPath)).filter((message) => message.method === "turn/start")).toHaveLength(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "error", code: "delivery_start_unconfirmed" }));
+    },
+  );
 
   it("keeps a completed turn idle when its start response arrives after lifecycle events", async () => {
     process.env.OPENBOT_FAKE_AUTO_COMPLETE = "Finished before the start response";

@@ -46,6 +46,7 @@ import { runCauseEffect } from "./effect-boundary";
 import { LineTooLongError } from "./jsonl";
 import { loginShellPath, type McpToolRuntimes, NO_MCP_TOOL_RUNTIMES } from "./mcp-provider-shapes";
 import type { DynamicToolCallParams } from "./protocol";
+import { decodeTurnResponse } from "./protocol";
 import { NO_PROVIDER_CREDENTIALS } from "./provider-drivers";
 import { SidebarLayoutStore } from "./sidebar-layout-store";
 
@@ -301,11 +302,45 @@ describe.sequential("AgentService: providers", () => {
     expect(service.listAgents().some((agent) => agent.id === "chief")).toBe(true);
   });
 
+  it.each(["transport", "internal", "decode"])(
+    "keeps an uncertain Codex start after %s reserved without replay",
+    async (failure) => {
+      const { store, mailbox } = stores(root);
+      let reject = true;
+      const client = new FakeAgentClient("codex", "DONE", true, true, {}, async (method) => {
+        if (method !== "turn/start" || !reject) return;
+        reject = false;
+        if (failure === "internal") throw new AppServerError("Unknown provider failure", -32603);
+        if (failure === "decode") decodeTurnResponse({});
+        throw new Error("Connection lost after submission");
+      });
+      service = createTestService({ store, mailbox, preferredProvider: "codex", clientFactory: () => client });
+      await runCauseEffect(service.initialize());
+      const first = await runCauseEffect(service.sendMessage({ agentId: "chief", text: "Potentially accepted" }));
+      await waitForQueue(
+        service,
+        "chief",
+        (queue) => queue.deliveries[0]?.status === "starting" && queue.deliveries[0]?.error !== null,
+      );
+      const later = await runCauseEffect(service.sendMessage({ agentId: "chief", text: "Next input" }));
+      expect(service.listQueue("chief").deliveries.map((entry) => entry.status)).toEqual(["starting", "queued"]);
+      expect(client.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+      const id = first.deliveries[0]?.id;
+      if (!id) throw new Error("The unconfirmed delivery is missing.");
+      await runCauseEffect(service.cancelQueuedMessage("chief", id));
+      await waitForQueue(service, "chief", (queue) => queue.deliveries[1]?.status === "completed");
+      expect(service.listQueue("chief").deliveries.map((entry) => entry.status)).toEqual(["cancelled", "completed"]);
+      expect(service.listQueue("chief").deliveries[1]?.id).toBe(later.deliveries[0]?.id);
+      expect(client.requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+    },
+  );
+
   it("refreshes outdated Codex tools while preserving the agent and conversation, then resumes unchanged tools", async () => {
     const { store, mailbox } = stores(root);
     let rejectTurn = false;
     const client = new FakeAgentClient("codex", "CODEX_DONE", true, true, {}, async (method) => {
-      if (method === "turn/start" && rejectTurn) throw new Error("Provider rejected the handoff turn.");
+      if (method === "turn/start" && rejectTurn)
+        throw new AppServerError("Provider rejected the handoff turn.", -32600);
     });
     const startService = async () => {
       const next = createTestService({
@@ -539,7 +574,7 @@ describe.sequential("AgentService: providers", () => {
     const client = new FakeAgentClient("codex", "CODEX_DONE", true, true, {}, async (method) => {
       // Quoted bare, the way a CLI reports the request it failed on. No shared pattern covers it:
       // only the value itself, remembered at hand-off, can take it out again.
-      if (method === "turn/start") throw new Error(`upstream refused the token ${token}`);
+      if (method === "turn/start") throw new AppServerError(`upstream refused the token ${token}`, -32600);
     });
     const events: AgentEvent[] = [];
     service = createTestService({
@@ -607,7 +642,7 @@ describe.sequential("AgentService: providers", () => {
     // No known token prefix: only the registration that the hand-off makes can redact it.
     const token = "connector-opaque-token-0123456789";
     const client = new FakeAgentClient("codex", "CODEX_DONE", true, true, {}, async (method) => {
-      if (method === "turn/start") throw new Error(`GitHub MCP refused ${token}`);
+      if (method === "turn/start") throw new AppServerError(`GitHub MCP refused ${token}`, -32600);
     });
     const events: AgentEvent[] = [];
     service = createTestService({
@@ -1721,7 +1756,7 @@ describe.sequential("AgentService: providers", () => {
     const { store, mailbox } = stores(root);
     let rejectTurn = false;
     const client = new FakeAgentClient("codex", "DONE", true, true, {}, async (method) => {
-      if (rejectTurn && method === "turn/start") throw new Error("Turn rejected.");
+      if (rejectTurn && method === "turn/start") throw new AppServerError("Turn rejected.", -32600);
     });
     const start = async () => {
       const next = createTestService({

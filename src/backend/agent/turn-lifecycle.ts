@@ -436,7 +436,7 @@ export class TurnLifecycle {
             (delivery.turnId === null || delivery.turnId === turnId)
           ) {
             // Completion must wait for this exact receipt and its channel ownership update.
-            // Once completion already removed the running turn, late items stay unconfirmed.
+            // Once completion finishes the running turn, late items stay unconfirmed.
             yield* Effect.gen({ self: this }, function* () {
               const previous = this.#turnAssociations.get(turnId);
               const association = Deferred.makeUnsafe<void, TurnOperationFailed>();
@@ -719,7 +719,6 @@ export class TurnLifecycle {
     status: string,
   ) {
     const running = this.#runningTurns.get(turnId);
-    this.#runningTurns.delete(turnId);
     const noUpdateCalled = this.#noUpdateTurns.delete(turnId);
     if (running) {
       // `waitMs` is OpenBot's part of a slow reply: the queue (a usage-limit hold included), the
@@ -749,6 +748,8 @@ export class TurnLifecycle {
     yield* this.#images.waitForOperations(threadId, turnId);
     const association = this.#turnAssociations.get(turnId);
     if (association) yield* Deferred.await(association).pipe(Effect.catch(() => Effect.void));
+    // Exact input receipts retain this owner until their mailbox association finishes.
+    if (this.#runningTurns.get(turnId) === running) this.#runningTurns.delete(turnId);
     this.#memories.finishTurn(turnId, status);
     // A refused session is closed below, and a spent plan would refuse the summary turn too, so
     // neither is compacted.

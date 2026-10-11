@@ -74,6 +74,7 @@ const FAKE_RUNTIME_ENV_VARS = [
   "OPENBOT_FAKE_COMPACTION_DELAY",
   "OPENBOT_FAKE_ARCHIVED_THREAD",
   "OPENBOT_FAKE_TURN_START_RESPONSE_DELAY",
+  "OPENBOT_FAKE_INPUT_RECEIPT",
   "OPENBOT_FAKE_WARNING",
   "OPENBOT_FAKE_CLAUDE_LOGIN_LOG",
   "OPENBOT_FAKE_CODEX_CONFIG",
@@ -807,6 +808,11 @@ process.stdin.on("data", (chunk) => {
         if (startResponseDelay > 0) setTimeout(respondToStart, startResponseDelay);
         else respondToStart();
         write({ method: "turn/started", params: { threadId: message.params.threadId, turn: { id: turnId } } });
+        if (process.env.OPENBOT_FAKE_INPUT_RECEIPT === "1") {
+          const item = { type: "userMessage", id: "input-" + turnId, clientId: message.params.clientUserMessageId, content: message.params.input };
+          turns.get(turnId).items.push(item);
+          write({ method: "item/completed", params: { threadId: message.params.threadId, turnId, item } });
+        }
         if (process.env.OPENBOT_FAKE_WARNING) {
           write({ method: "warning", params: { threadId: message.params.threadId, message: process.env.OPENBOT_FAKE_WARNING } });
         }
@@ -840,7 +846,7 @@ process.stdin.on("data", (chunk) => {
             const turn = turns.get(turnId);
             if (turn) {
               turn.status = "completed";
-              turn.items = [item];
+              turn.items.push(item);
             }
             write({ method: "item/completed", params: { threadId: message.params.threadId, turnId, item } });
             write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed" } } });
